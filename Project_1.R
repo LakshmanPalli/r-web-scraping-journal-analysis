@@ -11,6 +11,7 @@ library(rvest)
 library(httr)
 library(xml2)
 library(ggplot2)
+library(tidyverse)
 
 
 
@@ -35,8 +36,7 @@ extract_all_articles <- function(year) {
   absolute_urls <- paste0("https://neuraldevelopment.biomedcentral.com", href_values)
   
   # Initialize lists to store extracted data
-  titles <- authors <- correspondence_authors <- correspondence_emails <- publish_dates <- abstracts <- keywords <- list()
-  
+  titles <- authors <- correspondence_authors <- correspondence_emails <- publish_dates <- abstracts <- keywords <- contents <- c()
   # Loop through each article URL and extract data
   for (article_url in absolute_urls) {
     # Read the HTML content of the article page
@@ -45,7 +45,9 @@ extract_all_articles <- function(year) {
     # Extract title
     title <- article_page %>% html_node("h1.c-article-title") %>% html_text(trim = TRUE)
     titles <- c(titles, title)
-    
+    # Extract Text
+    content <- article_page %>%  html_nodes("article") %>% html_text()
+    contents <- c(contents,content)
     # Extract author names
     author_names <- article_page %>% html_nodes("ul.c-article-author-list a[data-test='author-name']") %>% html_text(trim = TRUE) %>% paste(collapse = ", ")
     authors <- c(authors, author_names)
@@ -77,7 +79,6 @@ extract_all_articles <- function(year) {
       keywords <- c(keywords, NA)
     }
   }
-  
   # Combine extracted data into a data frame
   articles_df <- data.frame(
     Title = titles,
@@ -86,7 +87,8 @@ extract_all_articles <- function(year) {
     Correspondence_Email = correspondence_emails,
     Publish_Date = publish_dates,
     Abstract = abstracts,
-    Keywords = keywords,
+    Keywords =keywords,
+    Contents = contents,
     stringsAsFactors = FALSE
   )
   
@@ -97,72 +99,26 @@ extract_all_articles <- function(year) {
 year <- 2024                                  ## year: user input!! {please select any year from 2006 to 2024}
 article_data <- extract_all_articles(year)
 
+# Task 3 Cleaning- 
+# Loads all Article data into a list from 2006 to 2024
+article_list <-lapply(2024:2006,
+                      function(x){
+                        extract_all_articles(x)
+                      })
 
+# renames every element with corresponding year
+names(article_list) <- as.character(2024:2006)
 
-#### Task 3: Data Cleaning and Preprocessing
+#Combines list of dataframes and creates publish year
+article_final <- bind_rows(article_list) %>% 
+  mutate(Publish_Date=ymd(Publish_Date),
+         Publish_Year=year(Publish_Date))
 
-## Removal of white spaces, and format handling
-
-# Function to clean and preprocess article data
-clean_and_preprocess_data <- function(articles_df) {
-  # Remove leading and trailing whitespace from the title
-  if (!is.null(articles_df$Title)) {
-    articles_df$Title <- trimws(articles_df$Title)
-  }
-  
-  # Remove any HTML tags from the abstract
-  if (!is.null(articles_df$Abstract)) {
-    articles_df$Abstract <- gsub("<.*?>", "", articles_df$Abstract)
-  }
-  
-  # Remove leading and trailing whitespace from the abstract
-  if (!is.null(articles_df$Abstract)) {
-    articles_df$Abstract <- trimws(articles_df$Abstract)
-  }
-  
-  # Remove any leading or trailing whitespace from author names
-  if (!is.null(articles_df$Authors)) {
-    articles_df$Authors <- trimws(articles_df$Authors)
-  }
-  
-  # Remove any empty strings from author names
-  if (!is.null(articles_df$Authors)) {
-    articles_df$Authors <- articles_df$Authors[articles_df$Authors != ""]
-  }
-  
-  # Remove leading and trailing whitespace from the corresponding author's name and email
-  if (!is.null(articles_df$Correspondence_Author)) {
-    articles_df$Correspondence_Author <- trimws(articles_df$Correspondence_Author)
-  }
-  if (!is.null(articles_df$Correspondence_Email)) {
-    articles_df$Correspondence_Email <- trimws(articles_df$Correspondence_Email)
-  }
-  
-  # ToDo: Add cleaning and preprocessing for other fields as needed
-  
-  # Return the cleaned and preprocessed data frame
-  return(articles_df)
-}
-
-
-# Function to extract all articles with data cleaning and preprocessing
-extract_all_articles_cleaned <- function(year) {
-  # Extract articles
-  articles_df <- extract_all_articles(year)
-  
-  # Clean and preprocess the extracted data
-  cleaned_articles_df <- clean_and_preprocess_data(articles_df)
-  
-  # Return the cleaned and preprocessed data frame
-  return(cleaned_articles_df)
-}
-
-# Call the function with the input year
-year <- 2024                             ## year: user input!! {please select any year from 2006 to 2024}
-article_data_cleaned <- extract_all_articles_cleaned(year)
-
-
-
+write_csv(article_final %>% select(-Contents),"Neural_Development_articles.csv")
+Neural_develop <- read_csv("Neural_Development_articles.csv")
+# Fixing Keyword Column
+article_finallong <- article_final %>% separate_longer_delim(Keywords,delim = ", ") %>% 
+  replace_na(list(Keywords="No keywords"))
 
 
 #### Task 4: Data Analysis and Visualization
@@ -171,94 +127,34 @@ article_data_cleaned <- extract_all_articles_cleaned(year)
 
 # a) The no. of keywords(y) across each keyword(x) in each journal
 
-url <- "https://neuraldevelopment.biomedcentral.com/articles/10.1186/s13064-024-00180-8" ## should provide the link manually {please provide journal link}
-page <- read_html(url)
+articles_year <- article_finallong %>%
+  filter(Publish_Year==2024)
 
-# Initialize an empty list to store counts for each keyword
-keyword_counts <- list()
-
-
-# Extract keyword elements
-keyword_elements <- page %>% html_nodes("ul.c-article-subject-list a")
-
-# Extract keywords if keyword elements are found, otherwise set to NA
-keywords <- if (length(keyword_elements) > 0) keyword_elements %>% html_text() else NA
-  
-article_content <- page %>% html_nodes("article") %>% html_text()
-
-# Iterate over each keyword
-for (keyword in keywords) {
-  # Find count of occurrences of the keyword within the article content
-  count <- length(gregexpr(keyword, article_content, ignore.case = TRUE)[[1]])
-  
-  # Store the count for the keyword
-  keyword_counts[[keyword]] <- count
+create_keyword_count <-function(data,keywords){
+  keyword_count <- c()
+  for(i in 1:length(keywords)){
+    keyword_count[i]<-str_count(data[["Contents"]][i],paste0("(?i)",keywords[i]))
+  }
+  keyword_count
 }
 
-# Convert the list of counts to a data frame for easier manipulation
-keyword_counts_df <- data.frame(keyword = names(keyword_counts),
-                                frequency = unlist(keyword_counts),
-                                stringsAsFactors = FALSE)
+articles_year$Keyword_Count<-create_keyword_count(articles_year,articles_year$Keywords)
 
-
-# Sort the data frame by frequency in descending order
-keyword_counts_df <- keyword_counts_df[order(keyword_counts_df$frequency, decreasing = TRUE),]
-
-# Print the keyword counts data frame
-print(keyword_counts_df)
-
-# Plotting
-ggplot(keyword_counts_df, aes(x = keyword, y = frequency)) + # specify the data and the x and y variables
-  geom_col() + # draw the bars
-  labs(title = "Keywords & Keyword Count", x = "Keyword", y = "Frequency") # add title and labels
+articles_year %>% 
+  ggplot(aes(x=reorder(Keywords,Keyword_Count),y=Keyword_Count,fill=Title)) +
+  geom_bar(stat = "identity") + theme_classic()+ 
+  labs(title = "Key Word Appearances in Neural Development Articles (2024)",
+       x="Key words",y="Appearances")+ coord_flip()
 
 
 # b) The no.of papers published(y) across year(X) in this topic
 
-# Function to extract the number of papers published in a given year
-publish_papers_count <- function(year) {
-  volume <- year - 2005
-  url <- paste0("https://neuraldevelopment.biomedcentral.com/articles?query=&volume=",volume,"&searchType=&tab=keyword")
-  page <- read_html(url)
-  
-  # Extract the number of search results
-  result_count <- page %>%
-    html_node("h2[data-test='result-title'] strong[data-test='search-results-count']") %>%
-    html_text() %>%
-    as.numeric()
-  
-  return(result_count)
-}
-
-
-# Range of years to analyze
-start_year <- 2006
-end_year <- 2024
-
-# Initialize vectors to store year and paper counts
-years <- start_year:end_year
-paper_counts <- numeric(length(years))
-
-
-# Loop through each year to get the paper count
-for (i in 1:length(years)) {
-  paper_counts[i] <- publish_papers_count(years[i])
-}
-
-# Create a data frame
-papers_df <-
-  data.frame(year = years, papers_published = paper_counts)
-
-# Plotting
-ggplot(papers_df, aes(x = year, y = papers_published)) +
-  geom_line() +
-  geom_point() +
-  scale_x_continuous(breaks = years, labels = years) +  # Display every year on x-axis
-  scale_y_continuous(breaks = seq(0, max(paper_counts), by = 5)) +  # Adjust y-axis to range at intervals of 5 units
-  labs(title = "Number of Papers Published in Neural Development, Each Year (2006-2024)",
-       x = "Year",
-       y = "Number of Papers Published")
-
-
-
+num_of_articles <- article_final %>% group_by(Publish_Year) %>%
+  summarise(Publish_Amount=n())
+num_of_articles %>%
+  ggplot(aes(x=Publish_Year,y=Publish_Amount)) + geom_line()+
+  geom_smooth(method="loess")+
+  theme_classic() + labs(title = "Number of Articles Published in Neural Development (2006-2024)",
+                         x="Year Published",
+                         y="Number of Articles") 
 
